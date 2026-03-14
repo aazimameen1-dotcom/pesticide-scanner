@@ -34,6 +34,7 @@ const editModalClose = document.getElementById('edit-modal-close');
 
 let stream = null;
 let isScanning = false;
+let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
 let aiCache = {}; // Cache to store Kimi AI descriptions
 
 // Initialize app
@@ -128,11 +129,12 @@ async function startScanner() {
     startScanBtn.classList.remove('primary-btn');
     
     document.getElementById('snap-btn').classList.remove('hidden');
+    document.getElementById('switch-cam-btn').classList.remove('hidden');
     const video = document.getElementById('video-feed');
     video.classList.remove('hidden');
     
     try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
         video.srcObject = stream;
     } catch (err) {
         console.error("Camera error:", err);
@@ -151,6 +153,7 @@ function stopScanner() {
     startScanBtn.classList.add('primary-btn');
     
     document.getElementById('snap-btn').classList.add('hidden');
+    document.getElementById('switch-cam-btn').classList.add('hidden');
     
     if (stream) {
         stream.getTracks().forEach(track => track.stop());
@@ -160,6 +163,22 @@ function stopScanner() {
     video.classList.add('hidden');
     video.srcObject = null;
 }
+
+// Switch Camera (front <-> back)
+document.getElementById('switch-cam-btn').addEventListener('click', async () => {
+    currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+    if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+    }
+    const video = document.getElementById('video-feed');
+    try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: currentFacingMode } });
+        video.srcObject = stream;
+    } catch (err) {
+        console.error("Camera switch error:", err);
+        showNotification("Could not switch camera.", "error");
+    }
+});
 
 // Snap & Analyze Event
 document.getElementById('snap-btn').addEventListener('click', async () => {

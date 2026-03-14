@@ -100,6 +100,7 @@ async function uploadToTelegram(base64Data) {
 app.post('/api/scan', async (req, res) => {
     try {
         const { packageName, imageBase64 } = req.body;
+        console.log(`POST /api/scan - packageName: ${packageName}, hasImage: ${!!imageBase64}, imageLength: ${imageBase64 ? imageBase64.length : 0}`);
         
         if (!packageName) {
             return res.status(400).json({ error: 'Package name is required' });

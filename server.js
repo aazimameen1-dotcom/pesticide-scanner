@@ -1,15 +1,9 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const mysql = require('mysql2/promise');
+const Database = require('better-sqlite3');
 const path = require('path');
 const fs = require('fs');
-const dns = require('dns');
-const { promisify } = require('util');
-const dnsResolve = promisify(dns.resolve4);
-
-// Use public DNS servers to avoid local DNS suffix issues
-dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -21,67 +15,34 @@ app.use(express.json({ limit: '50mb' }));
 // Serve frontend static files
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Database connection configuration
-const dbHost = process.env.DB_HOST || 'localhost';
-const dbConfig = {
-    host: dbHost,
-    user: process.env.DB_USER || process.env.DB_USERNAME || 'root', 
-    password: process.env.DB_PASSWORD || 'password', 
-    database: process.env.DB_NAME || process.env.DB_DATABASE || 'pesticide_db',
-    port: parseInt(process.env.DB_PORT) || 3306,
-    ssl: dbHost !== 'localhost' 
-        ? { rejectUnauthorized: true, servername: dbHost } 
-        : undefined,
-    enableKeepAlive: true,
-};
+// SQLite database setup
+const dbPath = path.join(__dirname, 'pesticide.db');
+let db;
 
-// Test DB Connection and ensure table exists
-async function initDB() {
+function initDB() {
     try {
-        // Resolve hostname if DNS has issues (e.g., local DNS suffix appending)
-        if (dbHost !== 'localhost') {
-            try {
-                const addresses = await dnsResolve(dbHost);
-                if (addresses && addresses.length > 0) {
-                    dbConfig.host = addresses[0];
-                    console.log(`Resolved ${dbHost} to ${addresses[0]}`);
-                }
-            } catch (dnsErr) {
-                console.log(`DNS resolve info: using hostname directly (${dnsErr.message})`);
-            }
-        }
+        db = new Database(dbPath);
+        db.pragma('journal_mode = WAL');
 
-        // Connect to the database
-        const pool = mysql.createPool(dbConfig);
-        
-        // Create table if it doesn't exist
-        await pool.query(`
+        db.exec(`
             CREATE TABLE IF NOT EXISTS scans (
-                id INT AUTO_INCREMENT PRIMARY KEY,
-                package_name VARCHAR(255) NOT NULL,
-                scan_date DATETIME NOT NULL
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                package_name TEXT NOT NULL,
+                scan_date TEXT NOT NULL,
+                image_path TEXT
             )
         `);
-        
-        // Add image_path column if not exists (fallback for existing dbs)
-        try {
-            await pool.query('ALTER TABLE scans ADD COLUMN image_path VARCHAR(255)');
-        } catch (colErr) {
-            // Ignore error assuming it implies column already exists
-        }
+
         console.log('Database and table ready.');
-        return pool;
     } catch (error) {
-        console.error('Error initializing database. Make sure MySQL is running and credentials are correct:', error.message);
-        // We will keep running to serve frontend even if DB fails, but insertions will fail
+        console.error('Error initializing database:', error.message);
     }
 }
 
-let dbPool;
-initDB().then(pool => { dbPool = pool; });
+initDB();
 
 // API endpoint to record a scan
-app.post('/api/scan', async (req, res) => {
+app.post('/api/scan', (req, res) => {
     try {
         const { packageName, imageBase64 } = req.body;
         
@@ -89,7 +50,7 @@ app.post('/api/scan', async (req, res) => {
             return res.status(400).json({ error: 'Package name is required' });
         }
         
-        if (!dbPool) {
+        if (!db) {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
 
@@ -106,16 +67,13 @@ app.post('/api/scan', async (req, res) => {
             }
         }
 
-        // We use MySQL's NOW() function for the current date and time
-        const [result] = await dbPool.query(
-            'INSERT INTO scans (package_name, scan_date, image_path) VALUES (?, NOW(), ?)',
-            [packageName, imagePath]
-        );
+        const stmt = db.prepare('INSERT INTO scans (package_name, scan_date, image_path) VALUES (?, datetime(\'now\'), ?)');
+        const result = stmt.run(packageName, imagePath);
         
         res.json({ 
             success: true, 
             message: 'Scan recorded successfully',
-            id: result.insertId,
+            id: result.lastInsertRowid,
             packageName: packageName,
             imagePath: imagePath
         });
@@ -126,15 +84,13 @@ app.post('/api/scan', async (req, res) => {
 });
 
 // API endpoint to fetch recent scans (optional, for the UI to display)
-app.get('/api/scans', async (req, res) => {
+app.get('/api/scans', (req, res) => {
     try {
-        if (!dbPool) {
+        if (!db) {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
 
-        const [rows] = await dbPool.query(
-            'SELECT id, package_name, scan_date, image_path FROM scans ORDER BY scan_date DESC LIMIT 50'
-        );
+        const rows = db.prepare('SELECT id, package_name, scan_date, image_path FROM scans ORDER BY scan_date DESC LIMIT 50').all();
         res.json(rows);
     } catch (error) {
         console.error('Error fetching scans:', error);
@@ -143,23 +99,23 @@ app.get('/api/scans', async (req, res) => {
 });
 
 // API endpoint to delete a scan
-app.delete('/api/scans/:id', async (req, res) => {
+app.delete('/api/scans/:id', (req, res) => {
     try {
         const id = req.params.id;
-        if (!dbPool) {
+        if (!db) {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
         
         // Find existing record to delete image file if exists
-        const [rows] = await dbPool.query('SELECT image_path FROM scans WHERE id = ?', [id]);
-        if (rows.length > 0 && rows[0].image_path) {
-            const filepath = path.join(__dirname, 'public', rows[0].image_path);
+        const row = db.prepare('SELECT image_path FROM scans WHERE id = ?').get(id);
+        if (row && row.image_path) {
+            const filepath = path.join(__dirname, 'public', row.image_path);
             if (fs.existsSync(filepath)) {
                 fs.unlinkSync(filepath);
             }
         }
         
-        await dbPool.query('DELETE FROM scans WHERE id = ?', [id]);
+        db.prepare('DELETE FROM scans WHERE id = ?').run(id);
         res.json({ success: true, message: 'Scan deleted successfully' });
     } catch (error) {
         console.error('Error deleting scan:', error);
@@ -168,19 +124,19 @@ app.delete('/api/scans/:id', async (req, res) => {
 });
 
 // API endpoint to update a scan
-app.put('/api/scans/:id', async (req, res) => {
+app.put('/api/scans/:id', (req, res) => {
     try {
         const id = req.params.id;
         const { packageName, scanDate } = req.body;
         
-        if (!dbPool) {
+        if (!db) {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
         
         if (scanDate) {
-            await dbPool.query('UPDATE scans SET package_name = ?, scan_date = ? WHERE id = ?', [packageName, new Date(scanDate), id]);
+            db.prepare('UPDATE scans SET package_name = ?, scan_date = ? WHERE id = ?').run(packageName, scanDate, id);
         } else {
-            await dbPool.query('UPDATE scans SET package_name = ? WHERE id = ?', [packageName, id]);
+            db.prepare('UPDATE scans SET package_name = ? WHERE id = ?').run(packageName, id);
         }
         
         res.json({ success: true, message: 'Scan updated successfully' });

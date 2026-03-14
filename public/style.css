@@ -303,11 +303,102 @@ tr:hover td {
 
 /* Responsive */
 @media (max-width: 600px) {
-    .glass-container {
-        padding: 1.5rem;
-        border-radius: var(--radius-md);
+    body {
+        padding: 0.5rem;
+        align-items: flex-start;
     }
+
+    .glass-container {
+        padding: 1rem;
+        border-radius: var(--radius-md);
+        gap: 1rem;
+    }
+
+    header h1 {
+        font-size: 1.8rem;
+    }
+
+    header p {
+        font-size: 0.85rem;
+    }
+
+    .card {
+        padding: 1rem;
+    }
+
     .action-buttons {
         flex-direction: column;
+        gap: 0.5rem;
+        margin-top: 1rem;
+    }
+
+    .btn {
+        padding: 0.9rem 1rem;
+        font-size: 0.95rem;
+        min-height: 48px; /* touch-friendly */
+    }
+
+    #video-feed {
+        max-height: 50vh !important;
+    }
+
+    /* Table as stacked cards on mobile */
+    table, thead, tbody, th, td, tr {
+        display: block;
+    }
+
+    thead tr {
+        display: none;
+    }
+
+    tr {
+        background: rgba(255, 255, 255, 0.03);
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: var(--radius-sm);
+        padding: 0.75rem;
+        margin-bottom: 0.75rem;
+    }
+
+    td {
+        padding: 0.4rem 0;
+        border-bottom: none;
+        text-align: left;
+        font-size: 0.85rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+
+    td::before {
+        content: attr(data-label);
+        font-weight: 600;
+        color: var(--text-muted);
+        font-size: 0.8rem;
+        margin-right: 0.5rem;
+        flex-shrink: 0;
+    }
+
+    .recent-scans h3 {
+        font-size: 1rem;
+    }
+
+    /* Modals full-width on mobile */
+    #ai-modal, #image-modal, #edit-modal {
+        width: 95vw !important;
+        max-width: 95vw !important;
+        max-height: 90vh !important;
+        padding: 1rem !important;
+    }
+
+    #image-modal-content {
+        max-height: 30vh !important;
+    }
+
+    /* Safe area for notched phones */
+    .glass-container {
+        padding-top: max(1rem, env(safe-area-inset-top));
+        padding-bottom: max(1rem, env(safe-area-inset-bottom));
+        padding-left: max(1rem, env(safe-area-inset-left));
+        padding-right: max(1rem, env(safe-area-inset-right));
     }
 }

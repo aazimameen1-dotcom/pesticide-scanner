@@ -273,14 +273,16 @@ async function fetchScans() {
                     : '<span style="font-size:0.8rem; color: var(--text-muted)">No Image</span>';
 
                 tr.innerHTML = `
-                    <td>#${scan.id}</td>
-                    <td>${imgCell}</td>
-                    <td><strong>${escapeHtml(scan.package_name)}</strong></td>
-                    <td class="text-muted">${dateStr}</td>
-                    <td>
-                        <button class="btn primary-btn ai-info-btn" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 0.3rem;" data-name="${escapeHtml(scan.package_name)}">Ask AI</button>
-                        <button class="btn outline-btn edit-btn" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; margin-right: 0.3rem; border-color: rgba(255, 255, 255, 0.4);" data-id="${scan.id}" data-name="${escapeHtml(scan.package_name)}" data-date="${scan.scan_date}">Edit</button>
-                        <button class="btn outline-btn delete-btn" style="padding: 0.3rem 0.6rem; font-size: 0.8rem; color: var(--error); border-color: rgba(239, 68, 68, 0.4);" data-id="${scan.id}">Delete</button>
+                    <td data-label="ID">#${scan.id}</td>
+                    <td data-label="Image">${imgCell}</td>
+                    <td data-label="Name"><strong>${escapeHtml(scan.package_name)}</strong></td>
+                    <td data-label="Date" class="text-muted">${dateStr}</td>
+                    <td data-label="Actions">
+                        <div style="display: flex; gap: 0.3rem; flex-wrap: wrap;">
+                            <button class="btn primary-btn ai-info-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem;" data-name="${escapeHtml(scan.package_name)}">Ask AI</button>
+                            <button class="btn outline-btn edit-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; border-color: rgba(255, 255, 255, 0.4);" data-id="${scan.id}" data-name="${escapeHtml(scan.package_name)}" data-date="${scan.scan_date}">Edit</button>
+                            <button class="btn outline-btn delete-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; color: var(--error); border-color: rgba(239, 68, 68, 0.4);" data-id="${scan.id}">Delete</button>
+                        </div>
                     </td>
                 `;
                 scansList.appendChild(tr);

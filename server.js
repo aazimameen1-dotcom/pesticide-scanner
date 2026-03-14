@@ -16,28 +16,21 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Database connection configuration
-// User might need to change these credentials to match their local MySQL setup
 const dbConfig = {
     host: process.env.DB_HOST || 'localhost',
     user: process.env.DB_USER || 'root', 
     password: process.env.DB_PASSWORD || 'password', 
     database: process.env.DB_NAME || 'pesticide_db',
+    port: parseInt(process.env.DB_PORT) || 3306,
+    ssl: process.env.DB_HOST && process.env.DB_HOST !== 'localhost' 
+        ? { rejectUnauthorized: true } 
+        : undefined,
 };
 
 // Test DB Connection and ensure table exists
 async function initDB() {
     try {
-        // First connect without specific database to create it if not exists
-        const initConnection = await mysql.createConnection({
-            host: dbConfig.host,
-            user: dbConfig.user,
-            password: dbConfig.password
-        });
-        
-        await initConnection.query(`CREATE DATABASE IF NOT EXISTS \`${dbConfig.database}\``);
-        await initConnection.end();
-
-        // Now connect to the specific database
+        // Connect to the database
         const pool = mysql.createPool(dbConfig);
         
         // Create table if it doesn't exist

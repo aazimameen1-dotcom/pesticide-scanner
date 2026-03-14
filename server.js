@@ -4,6 +4,9 @@ const cors = require('cors');
 const mysql = require('mysql2/promise');
 const path = require('path');
 const fs = require('fs');
+const dns = require('dns');
+const { promisify } = require('util');
+const dnsResolve = promisify(dns.resolve4);
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -16,20 +19,35 @@ app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // Database connection configuration
+const dbHost = process.env.DB_HOST || 'localhost';
 const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
+    host: dbHost,
     user: process.env.DB_USER || process.env.DB_USERNAME || 'root', 
     password: process.env.DB_PASSWORD || 'password', 
     database: process.env.DB_NAME || process.env.DB_DATABASE || 'pesticide_db',
     port: parseInt(process.env.DB_PORT) || 3306,
-    ssl: process.env.DB_HOST && process.env.DB_HOST !== 'localhost' 
-        ? { rejectUnauthorized: true } 
+    ssl: dbHost !== 'localhost' 
+        ? { rejectUnauthorized: true, servername: dbHost } 
         : undefined,
+    enableKeepAlive: true,
 };
 
 // Test DB Connection and ensure table exists
 async function initDB() {
     try {
+        // Resolve hostname if DNS has issues (e.g., local DNS suffix appending)
+        if (dbHost !== 'localhost') {
+            try {
+                const addresses = await dnsResolve(dbHost);
+                if (addresses && addresses.length > 0) {
+                    dbConfig.host = addresses[0];
+                    console.log(`Resolved ${dbHost} to ${addresses[0]}`);
+                }
+            } catch (dnsErr) {
+                console.log(`DNS resolve info: using hostname directly (${dnsErr.message})`);
+            }
+        }
+
         // Connect to the database
         const pool = mysql.createPool(dbConfig);
         

@@ -8,6 +8,9 @@ const dns = require('dns');
 const { promisify } = require('util');
 const dnsResolve = promisify(dns.resolve4);
 
+// Use public DNS servers to avoid local DNS suffix issues
+dns.setServers(['8.8.8.8', '8.8.4.4', '1.1.1.1']);
+
 const app = express();
 const port = process.env.PORT || 3000;
 

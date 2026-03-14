@@ -17,3 +17,7 @@ services:
         sync: false
       - key: PORT
         value: "3000"
+      - key: TG_BOT_TOKEN
+        sync: false
+      - key: TG_CHAT_ID
+        sync: false

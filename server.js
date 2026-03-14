@@ -8,6 +8,11 @@ const fs = require('fs');
 const app = express();
 const port = process.env.PORT || 3000;
 
+// Telegram Bot Config
+const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
+const TG_CHAT_ID = process.env.TG_CHAT_ID;
+const TG_API = TG_BOT_TOKEN ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : null;
+
 // Middleware
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
@@ -29,9 +34,17 @@ function initDB() {
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 package_name TEXT NOT NULL,
                 scan_date TEXT NOT NULL,
-                image_path TEXT
+                image_path TEXT,
+                telegram_file_id TEXT
             )
         `);
+
+        // Add telegram_file_id column if upgrading from older schema
+        try {
+            db.exec('ALTER TABLE scans ADD COLUMN telegram_file_id TEXT');
+        } catch (e) {
+            // Column already exists
+        }
 
         console.log('Database and table ready.');
     } catch (error) {
@@ -41,8 +54,37 @@ function initDB() {
 
 initDB();
 
+// Upload image to Telegram and return file_id
+async function uploadToTelegram(base64Data) {
+    if (!TG_API) return null;
+    
+    const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
+    if (!matches || matches.length !== 3) return null;
+    
+    const buffer = Buffer.from(matches[2], 'base64');
+    const blob = new Blob([buffer], { type: 'image/jpeg' });
+    
+    const formData = new FormData();
+    formData.append('chat_id', TG_CHAT_ID);
+    formData.append('photo', blob, 'scan.jpg');
+    
+    const response = await fetch(`${TG_API}/sendPhoto`, {
+        method: 'POST',
+        body: formData
+    });
+    
+    const data = await response.json();
+    if (data.ok && data.result.photo) {
+        // Get the largest photo size (last in array)
+        const photos = data.result.photo;
+        return photos[photos.length - 1].file_id;
+    }
+    console.error('Telegram upload error:', data);
+    return null;
+}
+
 // API endpoint to record a scan
-app.post('/api/scan', (req, res) => {
+app.post('/api/scan', async (req, res) => {
     try {
         const { packageName, imageBase64 } = req.body;
         
@@ -54,25 +96,18 @@ app.post('/api/scan', (req, res) => {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
 
-        // Save image if present
+        // Upload image to Telegram if present
         let imagePath = null;
+        let telegramFileId = null;
         if (imageBase64) {
-            const matches = imageBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-            if (matches && matches.length === 3) {
-                const buffer = Buffer.from(matches[2], 'base64');
-                const uploadsDir = path.join(__dirname, 'public', 'uploads');
-                if (!fs.existsSync(uploadsDir)) {
-                    fs.mkdirSync(uploadsDir, { recursive: true });
-                }
-                const filename = Date.now() + '.jpg';
-                const fileDir = path.join(uploadsDir, filename);
-                fs.writeFileSync(fileDir, buffer);
-                imagePath = '/uploads/' + filename;
+            telegramFileId = await uploadToTelegram(imageBase64);
+            if (telegramFileId) {
+                imagePath = `/api/image/${telegramFileId}`;
             }
         }
 
-        const stmt = db.prepare('INSERT INTO scans (package_name, scan_date, image_path) VALUES (?, datetime(\'now\'), ?)');
-        const result = stmt.run(packageName, imagePath);
+        const stmt = db.prepare('INSERT INTO scans (package_name, scan_date, image_path, telegram_file_id) VALUES (?, datetime(\'now\'), ?, ?)');
+        const result = stmt.run(packageName, imagePath, telegramFileId);
         
         res.json({ 
             success: true, 
@@ -94,11 +129,37 @@ app.get('/api/scans', (req, res) => {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
 
-        const rows = db.prepare('SELECT id, package_name, scan_date, image_path FROM scans ORDER BY scan_date DESC LIMIT 50').all();
+        const rows = db.prepare('SELECT id, package_name, scan_date, image_path, telegram_file_id FROM scans ORDER BY scan_date DESC LIMIT 50').all();
         res.json(rows);
     } catch (error) {
         console.error('Error fetching scans:', error);
         res.status(500).json({ error: 'Failed to fetch scans' });
+    }
+});
+
+// Proxy endpoint to serve images from Telegram
+app.get('/api/image/:fileId', async (req, res) => {
+    try {
+        if (!TG_API) return res.status(500).json({ error: 'Telegram not configured' });
+        
+        const fileId = req.params.fileId;
+        const fileRes = await fetch(`${TG_API}/getFile?file_id=${encodeURIComponent(fileId)}`);
+        const fileData = await fileRes.json();
+        
+        if (!fileData.ok || !fileData.result.file_path) {
+            return res.status(404).json({ error: 'File not found' });
+        }
+        
+        const fileUrl = `https://api.telegram.org/file/bot${TG_BOT_TOKEN}/${fileData.result.file_path}`;
+        const imageRes = await fetch(fileUrl);
+        
+        res.set('Content-Type', imageRes.headers.get('content-type') || 'image/jpeg');
+        res.set('Cache-Control', 'public, max-age=86400');
+        const buffer = Buffer.from(await imageRes.arrayBuffer());
+        res.send(buffer);
+    } catch (error) {
+        console.error('Error fetching image from Telegram:', error);
+        res.status(500).json({ error: 'Failed to fetch image' });
     }
 });
 
@@ -108,15 +169,6 @@ app.delete('/api/scans/:id', (req, res) => {
         const id = req.params.id;
         if (!db) {
             return res.status(500).json({ error: 'Database connection is not available' });
-        }
-        
-        // Find existing record to delete image file if exists
-        const row = db.prepare('SELECT image_path FROM scans WHERE id = ?').get(id);
-        if (row && row.image_path) {
-            const filepath = path.join(__dirname, 'public', row.image_path);
-            if (fs.existsSync(filepath)) {
-                fs.unlinkSync(filepath);
-            }
         }
         
         db.prepare('DELETE FROM scans WHERE id = ?').run(id);

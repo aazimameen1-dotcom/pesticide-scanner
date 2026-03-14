@@ -52,7 +52,82 @@ function initDB() {
     }
 }
 
-initDB();
+// --- Telegram DB Backup/Restore ---
+let dbBackupTimer = null;
+
+async function downloadDBFromTelegram() {
+    if (!TG_API) return false;
+    try {
+        // Get pinned message from channel which contains the latest DB backup
+        const chatRes = await fetch(`${TG_API}/getChat?chat_id=${encodeURIComponent(TG_CHAT_ID)}`);
+        const chatData = await chatRes.json();
+        if (!chatData.ok || !chatData.result.pinned_message || !chatData.result.pinned_message.document) {
+            console.log('No DB backup found in Telegram, starting fresh.');
+            return false;
+        }
+        const doc = chatData.result.pinned_message.document;
+        if (doc.file_name !== 'pesticide.db') {
+            console.log('Pinned message is not a DB backup, starting fresh.');
+            return false;
+        }
+        // Download the file
+        const fileRes = await fetch(`${TG_API}/getFile?file_id=${encodeURIComponent(doc.file_id)}`);
+        const fileData = await fileRes.json();
+        if (!fileData.ok || !fileData.result.file_path) return false;
+        const fileUrl = `https://api.telegram.org/file/bot${TG_BOT_TOKEN}/${fileData.result.file_path}`;
+        const dlRes = await fetch(fileUrl);
+        const buffer = Buffer.from(await dlRes.arrayBuffer());
+        fs.writeFileSync(dbPath, buffer);
+        console.log(`DB restored from Telegram (${buffer.length} bytes).`);
+        return true;
+    } catch (err) {
+        console.error('Error downloading DB from Telegram:', err.message);
+        return false;
+    }
+}
+
+async function uploadDBToTelegram() {
+    if (!TG_API || !db) return;
+    try {
+        // Checkpoint WAL to ensure DB file is complete
+        db.pragma('wal_checkpoint(TRUNCATE)');
+        const buffer = fs.readFileSync(dbPath);
+        const file = new File([buffer], 'pesticide.db', { type: 'application/octet-stream' });
+        const formData = new FormData();
+        formData.append('chat_id', TG_CHAT_ID);
+        formData.append('document', file);
+        formData.append('caption', `DB backup - ${new Date().toISOString()}`);
+        const res = await fetch(`${TG_API}/sendDocument`, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (data.ok) {
+            // Pin this message so we can find it on next startup
+            await fetch(`${TG_API}/pinChatMessage`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chat_id: TG_CHAT_ID, message_id: data.result.message_id, disable_notification: true })
+            });
+            console.log('DB backed up to Telegram.');
+        } else {
+            console.error('DB backup upload failed:', data.description);
+        }
+    } catch (err) {
+        console.error('Error uploading DB to Telegram:', err.message);
+    }
+}
+
+// Debounced backup: waits 2s after last write before uploading
+function scheduleDBBackup() {
+    if (dbBackupTimer) clearTimeout(dbBackupTimer);
+    dbBackupTimer = setTimeout(() => uploadDBToTelegram(), 2000);
+}
+
+// Startup: restore DB from Telegram, then init
+async function startup() {
+    await downloadDBFromTelegram();
+    initDB();
+}
+
+startup();
 
 // Upload image to Telegram and return file_id
 async function uploadToTelegram(base64Data) {
@@ -133,6 +208,7 @@ app.post('/api/scan', async (req, res) => {
 
         const stmt = db.prepare('INSERT INTO scans (package_name, scan_date, image_path, telegram_file_id) VALUES (?, datetime(\'now\'), ?, ?)');
         const result = stmt.run(packageName, imagePath, telegramFileId);
+        scheduleDBBackup();
         
         res.json({ 
             success: true, 
@@ -198,6 +274,7 @@ app.delete('/api/scans/:id', (req, res) => {
         }
         
         db.prepare('DELETE FROM scans WHERE id = ?').run(id);
+        scheduleDBBackup();
         res.json({ success: true, message: 'Scan deleted successfully' });
     } catch (error) {
         console.error('Error deleting scan:', error);
@@ -220,6 +297,7 @@ app.put('/api/scans/:id', (req, res) => {
         } else {
             db.prepare('UPDATE scans SET package_name = ? WHERE id = ?').run(packageName, id);
         }
+        scheduleDBBackup();
         
         res.json({ success: true, message: 'Scan updated successfully' });
     } catch (error) {

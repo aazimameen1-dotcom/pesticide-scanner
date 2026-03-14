@@ -60,8 +60,12 @@ app.post('/api/scan', (req, res) => {
             const matches = imageBase64.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
             if (matches && matches.length === 3) {
                 const buffer = Buffer.from(matches[2], 'base64');
+                const uploadsDir = path.join(__dirname, 'public', 'uploads');
+                if (!fs.existsSync(uploadsDir)) {
+                    fs.mkdirSync(uploadsDir, { recursive: true });
+                }
                 const filename = Date.now() + '.jpg';
-                const fileDir = path.join(__dirname, 'public', 'uploads', filename);
+                const fileDir = path.join(uploadsDir, filename);
                 fs.writeFileSync(fileDir, buffer);
                 imagePath = '/uploads/' + filename;
             }

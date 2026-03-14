@@ -56,31 +56,44 @@ initDB();
 
 // Upload image to Telegram and return file_id
 async function uploadToTelegram(base64Data) {
-    if (!TG_API) return null;
-    
-    const matches = base64Data.match(/^data:([A-Za-z-+\/]+);base64,(.+)$/);
-    if (!matches || matches.length !== 3) return null;
-    
-    const buffer = Buffer.from(matches[2], 'base64');
-    const blob = new Blob([buffer], { type: 'image/jpeg' });
-    
-    const formData = new FormData();
-    formData.append('chat_id', TG_CHAT_ID);
-    formData.append('photo', blob, 'scan.jpg');
-    
-    const response = await fetch(`${TG_API}/sendPhoto`, {
-        method: 'POST',
-        body: formData
-    });
-    
-    const data = await response.json();
-    if (data.ok && data.result.photo) {
-        // Get the largest photo size (last in array)
-        const photos = data.result.photo;
-        return photos[photos.length - 1].file_id;
+    if (!TG_API) {
+        console.log('Telegram not configured, skipping upload');
+        return null;
     }
-    console.error('Telegram upload error:', data);
-    return null;
+    
+    try {
+        // Extract base64 content
+        const commaIdx = base64Data.indexOf(',');
+        if (commaIdx === -1) return null;
+        const raw = base64Data.substring(commaIdx + 1);
+        
+        const buffer = Buffer.from(raw, 'base64');
+        console.log(`Uploading ${buffer.length} bytes to Telegram...`);
+        
+        const file = new File([buffer], 'scan.jpg', { type: 'image/jpeg' });
+        
+        const formData = new FormData();
+        formData.append('chat_id', TG_CHAT_ID);
+        formData.append('photo', file);
+        
+        const response = await fetch(`${TG_API}/sendPhoto`, {
+            method: 'POST',
+            body: formData
+        });
+        
+        const data = await response.json();
+        if (data.ok && data.result.photo) {
+            const photos = data.result.photo;
+            const fileId = photos[photos.length - 1].file_id;
+            console.log('Telegram upload success, file_id:', fileId.substring(0, 20) + '...');
+            return fileId;
+        }
+        console.error('Telegram upload failed:', JSON.stringify(data));
+        return null;
+    } catch (err) {
+        console.error('Telegram upload error:', err.message);
+        return null;
+    }
 }
 
 // API endpoint to record a scan
@@ -96,13 +109,24 @@ app.post('/api/scan', async (req, res) => {
             return res.status(500).json({ error: 'Database connection is not available' });
         }
 
-        // Upload image to Telegram if present
+        // Upload image to Telegram if present, fallback to local
         let imagePath = null;
         let telegramFileId = null;
         if (imageBase64) {
             telegramFileId = await uploadToTelegram(imageBase64);
             if (telegramFileId) {
-                imagePath = `/api/image/${telegramFileId}`;
+                imagePath = `/api/image/${encodeURIComponent(telegramFileId)}`;
+            } else {
+                // Fallback: save locally if Telegram fails
+                const commaIdx = imageBase64.indexOf(',');
+                if (commaIdx !== -1) {
+                    const buffer = Buffer.from(imageBase64.substring(commaIdx + 1), 'base64');
+                    const uploadsDir = path.join(__dirname, 'public', 'uploads');
+                    if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
+                    const filename = Date.now() + '.jpg';
+                    fs.writeFileSync(path.join(uploadsDir, filename), buffer);
+                    imagePath = '/uploads/' + filename;
+                }
             }
         }
 
@@ -138,11 +162,12 @@ app.get('/api/scans', (req, res) => {
 });
 
 // Proxy endpoint to serve images from Telegram
-app.get('/api/image/:fileId', async (req, res) => {
+app.get('/api/image/:fileId(*)', async (req, res) => {
     try {
         if (!TG_API) return res.status(500).json({ error: 'Telegram not configured' });
         
-        const fileId = req.params.fileId;
+        const fileId = decodeURIComponent(req.params.fileId);
+        console.log('Image proxy request for:', fileId.substring(0, 20) + '...');
         const fileRes = await fetch(`${TG_API}/getFile?file_id=${encodeURIComponent(fileId)}`);
         const fileData = await fileRes.json();
         

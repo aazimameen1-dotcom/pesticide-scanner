@@ -18,9 +18,9 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Database connection configuration
 const dbConfig = {
     host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root', 
+    user: process.env.DB_USER || process.env.DB_USERNAME || 'root', 
     password: process.env.DB_PASSWORD || 'password', 
-    database: process.env.DB_NAME || 'pesticide_db',
+    database: process.env.DB_NAME || process.env.DB_DATABASE || 'pesticide_db',
     port: parseInt(process.env.DB_PORT) || 3306,
     ssl: process.env.DB_HOST && process.env.DB_HOST !== 'localhost' 
         ? { rejectUnauthorized: true } 

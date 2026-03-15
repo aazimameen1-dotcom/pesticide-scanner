@@ -55,10 +55,10 @@ async function saveToTelegram() {
     if (!TG_API) return;
     try {
         const json = JSON.stringify({ scans, nextId }, null, 2);
-        const file = new File([json], 'scans.json', { type: 'application/json' });
+        const blob = new Blob([json], { type: 'application/json' });
         const formData = new FormData();
         formData.append('chat_id', TG_CHAT_ID);
-        formData.append('document', file);
+        formData.append('document', blob, 'scans.json');
         formData.append('caption', `Data backup - ${new Date().toISOString()} - ${scans.length} scans`);
         const res = await fetch(`${TG_API}/sendDocument`, { method: 'POST', body: formData });
         const data = await res.json();
@@ -94,19 +94,31 @@ async function uploadToTelegram(base64Data) {
         const raw = base64Data.substring(commaIdx + 1);
         const buffer = Buffer.from(raw, 'base64');
         console.log(`Uploading ${buffer.length} bytes to Telegram...`);
-        const file = new File([buffer], 'scan.jpg', { type: 'image/jpeg' });
+        // Try sendPhoto first, fallback to sendDocument
+        const blob = new Blob([buffer], { type: 'image/jpeg' });
         const formData = new FormData();
         formData.append('chat_id', TG_CHAT_ID);
-        formData.append('photo', file);
+        formData.append('photo', blob, 'scan.jpg');
         const response = await fetch(`${TG_API}/sendPhoto`, { method: 'POST', body: formData });
         const data = await response.json();
         if (data.ok && data.result.photo) {
             const photos = data.result.photo;
             const fileId = photos[photos.length - 1].file_id;
-            console.log('Telegram upload success, file_id:', fileId.substring(0, 20) + '...');
+            console.log('Telegram upload success (photo), file_id:', fileId.substring(0, 20) + '...');
             return fileId;
         }
-        console.error('Telegram upload failed:', JSON.stringify(data));
+        console.log('sendPhoto failed, trying sendDocument...');
+        const formData2 = new FormData();
+        formData2.append('chat_id', TG_CHAT_ID);
+        formData2.append('document', blob, 'scan.jpg');
+        const response2 = await fetch(`${TG_API}/sendDocument`, { method: 'POST', body: formData2 });
+        const data2 = await response2.json();
+        if (data2.ok && data2.result.document) {
+            const fileId = data2.result.document.file_id;
+            console.log('Telegram upload success (document), file_id:', fileId.substring(0, 20) + '...');
+            return fileId;
+        }
+        console.error('Telegram upload failed:', JSON.stringify(data2));
         return null;
     } catch (err) {
         console.error('Telegram upload error:', err.message);
@@ -165,9 +177,15 @@ app.get('/api/image/:fileId(*)', async (req, res) => {
         if (!fileData.ok || !fileData.result.file_path) return res.status(404).json({ error: 'File not found' });
         const fileUrl = `https://api.telegram.org/file/bot${TG_BOT_TOKEN}/${fileData.result.file_path}`;
         const imageRes = await fetch(fileUrl);
-        res.set('Content-Type', imageRes.headers.get('content-type') || 'image/jpeg');
+        const ct = imageRes.headers.get('content-type');
+        res.set('Content-Type', (ct && ct.startsWith('image/')) ? ct : 'image/jpeg');
         res.set('Cache-Control', 'public, max-age=86400');
-        res.send(Buffer.from(await imageRes.arrayBuffer()));
+        const imgBuf = Buffer.from(await imageRes.arrayBuffer());
+        // Detect actual image type from magic bytes
+        if (imgBuf[0] === 0x89 && imgBuf[1] === 0x50) res.set('Content-Type', 'image/png');
+        else if (imgBuf[0] === 0xFF && imgBuf[1] === 0xD8) res.set('Content-Type', 'image/jpeg');
+        else if (imgBuf[0] === 0x47 && imgBuf[1] === 0x49) res.set('Content-Type', 'image/gif');
+        res.send(imgBuf);
     } catch (error) {
         console.error('Error fetching image from Telegram:', error);
         res.status(500).json({ error: 'Failed to fetch image' });

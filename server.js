@@ -289,10 +289,64 @@ startup();
 const NVAPI_KEY = process.env.NVAPI_KEY;
 const NVAPI_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
+function extractStreamContent(eventData) {
+    const choice = eventData.choices && eventData.choices[0];
+    if (!choice) return '';
+
+    if (typeof choice.delta?.content === 'string') {
+        return choice.delta.content;
+    }
+    if (typeof choice.message?.content === 'string') {
+        return choice.message.content;
+    }
+    return '';
+}
+
+function parseNvidiaStream(rawBody, label) {
+    const lines = rawBody.split(/\r?\n/);
+    let combinedContent = '';
+
+    for (const line of lines) {
+        if (!line.startsWith('data:')) {
+            continue;
+        }
+
+        const payload = line.slice(5).trim();
+        if (!payload || payload === '[DONE]') {
+            continue;
+        }
+
+        try {
+            const eventData = JSON.parse(payload);
+            combinedContent += extractStreamContent(eventData);
+        } catch (error) {
+            console.error(`${label} stream event was invalid JSON:`, payload.slice(0, 500));
+            return { ok: false, error: 'AI service returned an invalid stream response' };
+        }
+    }
+
+    if (!combinedContent.trim()) {
+        return { ok: false, error: 'AI service returned an empty stream response' };
+    }
+
+    return {
+        ok: true,
+        data: {
+            choices: [{
+                message: {
+                    content: combinedContent.trim()
+                }
+            }]
+        }
+    };
+}
+
 async function callNvidiaApi(payload, label) {
     if (!NVAPI_KEY) {
         return { ok: false, error: 'NVAPI_KEY is not configured on the server' };
     }
+
+    const useStream = Boolean(payload.stream);
 
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
@@ -303,7 +357,7 @@ async function callNvidiaApi(payload, label) {
             method: 'POST',
             headers: {
                 "Authorization": `Bearer ${NVAPI_KEY}`,
-                "Accept": "application/json",
+                "Accept": useStream ? "text/event-stream" : "application/json",
                 "Content-Type": "application/json"
             },
             body: JSON.stringify(payload),
@@ -324,6 +378,10 @@ async function callNvidiaApi(payload, label) {
     if (!rawBody.trim()) {
         console.error(`${label} returned an empty response body.`);
         return { ok: false, error: 'AI service returned an empty response' };
+    }
+
+    if (useStream) {
+        return parseNvidiaStream(rawBody, label);
     }
 
     let data;
@@ -400,18 +458,17 @@ app.post('/api/analyze-image', async (req, res) => {
         if (!imageBase64) return res.status(400).json({ error: 'Image missing' });
 
         const payload = {
-            model: "meta/llama-3.2-90b-vision-instruct", 
+            model: "mistralai/mistral-large-3-675b-instruct-2512",
             messages: [{
                 role: "user",
-                content: [
-                    { type: "text", text: "What is the name of the pesticide product shown in this image? Reply with ONLY the product name (e.g. 'Roundup', 'Ortho', 'Bifen IT'). Do not add any conversational text." },
-                    { type: "image_url", image_url: { url: imageBase64 } }
-                ]
+                content: `What is the name of the pesticide product shown in this image? Reply with ONLY the product name. Do not add conversational text. <img src="${imageBase64}" />`
             }],
-            max_tokens: 128,
-            temperature: 0.2,
+            max_tokens: 512,
+            temperature: 0.15,
             top_p: 1.0,
-            stream: false
+            frequency_penalty: 0.0,
+            presence_penalty: 0.0,
+            stream: true
         };
 
         const result = await callNvidiaApi(payload, 'NV Vision API');

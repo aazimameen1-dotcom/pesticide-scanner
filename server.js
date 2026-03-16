@@ -407,13 +407,13 @@ app.post('/api/pesticide-info', async (req, res) => {
         if (!packageName) return res.status(400).json({ error: 'Package name missing' });
 
         const payload = {
-            model: "moonshotai/kimi-k2.5",
+            model: "mistralai/mistral-large-3-675b-instruct-2512",
             messages: [{
                 role: "user",
                 content: `Provide a short, 2-3 sentence informational summary about the pesticide product '${packageName}', including its uses and safety precautions.`
             }],
-            max_tokens: 1024,
-            temperature: 0.7,
+            max_tokens: 384,
+            temperature: 0.3,
             top_p: 1.0,
             stream: false
         };

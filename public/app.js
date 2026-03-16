@@ -35,7 +35,7 @@ const editModalClose = document.getElementById('edit-modal-close');
 let stream = null;
 let isScanning = false;
 let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
-let aiCache = {}; // Cache to store Kimi AI descriptions by scan ID
+let aiCache = {}; // Cache to store AI descriptions by scan ID
 let pendingImageBase64 = null;
 
 // Initialize app
@@ -394,14 +394,14 @@ async function fetchScans() {
 async function fetchAIInfo(scanId, packageName) {
     if (scanId && aiCache[scanId]) {
         aiModalContent.textContent = aiCache[scanId];
-        aiModalTitle.textContent = "Kimi Insights: " + packageName;
+        aiModalTitle.textContent = "AI Insights: " + packageName;
         aiModal.classList.remove('hidden');
         aiModalBackdrop.classList.remove('hidden');
         return;
     }
 
     aiModalTitle.textContent = "Analyzing " + packageName + "...";
-    aiModalContent.textContent = "Kimi is pulling intelligence...";
+    aiModalContent.textContent = "AI is pulling intelligence...";
     aiModal.classList.remove('hidden');
     aiModalBackdrop.classList.remove('hidden');
 
@@ -417,7 +417,7 @@ async function fetchAIInfo(scanId, packageName) {
                 aiCache[scanId] = data.info;
             }
             aiModalContent.textContent = data.info; 
-            aiModalTitle.textContent = "Kimi Insights: " + packageName;
+            aiModalTitle.textContent = "AI Insights: " + packageName;
         } else {
             aiModalContent.textContent = "Error: " + (data.error || "Unknown");
         }

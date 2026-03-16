@@ -6,6 +6,7 @@ This application lets users scan pesticide packages with a camera or enter them 
 - Node.js 18 or later
 - A Telegram bot token
 - A Telegram chat or channel ID where the bot can post files
+- An NVIDIA API key for text and image analysis
 
 ## Telegram Storage Setup
 1. Create a bot with BotFather and copy the bot token.
@@ -17,6 +18,7 @@ This application lets users scan pesticide packages with a camera or enter them 
 PORT=3000
 TG_BOT_TOKEN=your_bot_token_here
 TG_CHAT_ID=your_chat_id_here
+NVAPI_KEY=your_nvidia_api_key_here
 ```
 
 The server stores scan records in memory while running and periodically uploads a `scans.json` backup to Telegram. The latest pinned backup is used to restore data on startup.

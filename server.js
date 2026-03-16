@@ -286,10 +286,14 @@ async function startup() {
 startup();
 
 // NVIDIA AI Endpoints
-const NVAPI_KEY = "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";
+const NVAPI_KEY = process.env.NVAPI_KEY;
 const NVAPI_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
 async function callNvidiaApi(payload, label) {
+    if (!NVAPI_KEY) {
+        return { ok: false, error: 'NVAPI_KEY is not configured on the server' };
+    }
+
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
 
@@ -299,6 +303,7 @@ async function callNvidiaApi(payload, label) {
             method: 'POST',
             headers: {
                 "Authorization": `Bearer ${NVAPI_KEY}`,
+                "Accept": "application/json",
                 "Content-Type": "application/json"
             },
             body: JSON.stringify(payload),

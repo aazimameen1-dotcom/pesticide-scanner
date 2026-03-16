@@ -36,6 +36,7 @@ let stream = null;
 let isScanning = false;
 let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
 let aiCache = {}; // Cache to store Kimi AI descriptions by scan ID
+let pendingImageBase64 = null;
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -78,13 +79,13 @@ captureInput.addEventListener('change', e => {
 
             const data = await response.json();
             if (response.ok && data.name) {
-                onScanSuccess(data.name, base64Data);
+                onScanSuccess(cleanDetectedName(data.name), base64Data);
             } else {
-                showNotification(data.error || "Failed to analyze image.", "error");
+                fallbackToManualEntry(base64Data, data.error || "Failed to analyze image.");
             }
         } catch(err) {
             console.error("AI Server Error:", err);
-            showNotification("AI Server Error.", "error");
+            fallbackToManualEntry(base64Data, "AI text capture failed.");
         } finally {
             captureInput.value = '';
         }
@@ -97,15 +98,14 @@ manualEntryBtn.addEventListener('click', () => {
     if (isScanning) {
         stopScanner();
     }
-    readerContainer.classList.add('hidden');
-    manualForm.classList.remove('hidden');
-    packageNameInput.focus();
+    openManualEntry();
 });
 
 cancelManualBtn.addEventListener('click', () => {
     manualForm.classList.add('hidden');
     readerContainer.classList.remove('hidden');
     packageNameInput.value = '';
+    pendingImageBase64 = null;
 });
 
 // Form Submit Event
@@ -113,8 +113,11 @@ recordForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const pkgName = packageNameInput.value.trim();
     if (pkgName) {
-        recordScan(pkgName);
+        recordScan(pkgName, pendingImageBase64);
         packageNameInput.value = '';
+        pendingImageBase64 = null;
+        manualForm.classList.add('hidden');
+        readerContainer.classList.remove('hidden');
     }
 });
 
@@ -205,13 +208,13 @@ document.getElementById('snap-btn').addEventListener('click', async () => {
 
         const data = await response.json();
         if (response.ok && data.name) {
-            onScanSuccess(data.name, base64Data);
+            onScanSuccess(cleanDetectedName(data.name), base64Data);
         } else {
-            showNotification(data.error || "Failed to analyze image.", "error");
+            fallbackToManualEntry(base64Data, data.error || "Failed to analyze image.");
         }
     } catch(err) {
         console.error("AI Server Error:", err);
-        showNotification("AI Server Error.", "error");
+        fallbackToManualEntry(base64Data, "AI text capture failed.");
     }
 });
 
@@ -224,6 +227,27 @@ function onScanSuccess(decodedText, imageBase64 = null) {
 
 function onScanFailure(error) {
     // Expected during scanning process (not finding a code)
+}
+
+function openManualEntry(suggestedName = '') {
+    readerContainer.classList.add('hidden');
+    manualForm.classList.remove('hidden');
+    packageNameInput.value = suggestedName;
+    packageNameInput.focus();
+}
+
+function fallbackToManualEntry(imageBase64, message) {
+    pendingImageBase64 = imageBase64;
+    openManualEntry();
+    showNotification(`${message} Enter the package name manually and the image will still be saved.`, "error");
+}
+
+function cleanDetectedName(value) {
+    return value
+        .replace(/^['"\s]+|['"\s]+$/g, '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
 }
 
 // API Functions

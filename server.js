@@ -32,7 +32,8 @@ function normalizeScan(scan) {
         scan_date: scan.scan_date,
         image_path: scan.image_path || null,
         telegram_file_id: scan.telegram_file_id || null,
-        ai_description: scan.ai_description || null
+        ai_description: scan.ai_description || null,
+        extracted_text: scan.extracted_text || null
     };
 }
 
@@ -147,7 +148,8 @@ function cloneScan(scan) {
         scan_date: scan.scan_date,
         image_path: scan.image_path,
         telegram_file_id: scan.telegram_file_id,
-        ai_description: scan.ai_description
+        ai_description: scan.ai_description,
+        extracted_text: scan.extracted_text || null
     };
 }
 
@@ -156,7 +158,7 @@ function cloneScan(scan) {
 // Record a scan
 app.post('/api/scan', async (req, res) => {
     try {
-        const { packageName, imageBase64 } = req.body;
+        const { packageName, imageBase64, extractedText } = req.body;
         console.log(`POST /api/scan - packageName: ${packageName}, hasImage: ${!!imageBase64}`);
         if (!packageName) return res.status(400).json({ error: 'Package name is required' });
 
@@ -175,7 +177,8 @@ app.post('/api/scan', async (req, res) => {
             scan_date: new Date().toISOString().replace('T', ' ').substring(0, 19),
             image_path: imagePath,
             telegram_file_id: telegramFileId,
-            ai_description: null
+            ai_description: null,
+            extracted_text: typeof extractedText === 'string' ? extractedText.trim() || null : null
         };
         scans.push(scan);
         if (TG_ENABLED) {
@@ -257,13 +260,14 @@ app.delete('/api/scans/:id', async (req, res) => {
 // Update a scan
 app.put('/api/scans/:id', async (req, res) => {
     const id = parseInt(req.params.id);
-    const { packageName, scanDate, aiDescription } = req.body;
+    const { packageName, scanDate, aiDescription, extractedText } = req.body;
     const scan = scans.find(s => s.id === id);
     if (!scan) return res.status(404).json({ error: 'Scan not found' });
     const previousScan = cloneScan(scan);
     if (packageName) scan.package_name = packageName;
     if (scanDate) scan.scan_date = scanDate;
     if (typeof aiDescription === 'string') scan.ai_description = aiDescription.trim() || null;
+    if (typeof extractedText === 'string') scan.extracted_text = extractedText.trim() || null;
     if (TG_ENABLED) {
         try {
             await saveToTelegram();
@@ -383,6 +387,22 @@ function normalizeVisibleName(rawText) {
     return normalized;
 }
 
+function normalizeExtractedText(rawText) {
+    if (!rawText) return null;
+
+    const normalized = rawText
+        .replace(/^['"`\s]+|['"`\s]+$/g, '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+    if (!normalized) return null;
+    if (normalized.length > 500) {
+        return normalized.slice(0, 500).trim();
+    }
+    return normalized;
+}
+
 async function callNvidiaApi(payload, label, options = {}) {
     if (!NVAPI_KEY) {
         return { ok: false, error: 'NVAPI_KEY is not configured on the server' };
@@ -448,11 +468,22 @@ app.post('/api/pesticide-info', async (req, res) => {
         const { packageName, scanId } = req.body;
         if (!packageName) return res.status(400).json({ error: 'Package name missing' });
 
+        let extractedText = null;
+        if (scanId !== undefined && scanId !== null) {
+            const numericId = parseInt(scanId, 10);
+            const scan = scans.find(item => item.id === numericId);
+            extractedText = scan?.extracted_text || null;
+        }
+
+        const prompt = extractedText
+            ? `Using this extracted visible text from the package label: "${extractedText}", provide a short 2-3 sentence informational summary of the product, including likely use and key safety precautions. If the extracted text is incomplete, stay conservative and say so.`
+            : `Provide a short, 2-3 sentence informational summary about the pesticide product '${packageName}', including its uses and safety precautions.`;
+
         const payload = {
             model: NVAPI_MODEL,
             messages: [{
                 role: "user",
-                content: `Provide a short, 2-3 sentence informational summary about the pesticide product '${packageName}', including its uses and safety precautions.`
+                content: prompt
             }],
             max_tokens: 512,
             temperature: 0.2,
@@ -504,7 +535,7 @@ app.post('/api/analyze-image', async (req, res) => {
             model: NVAPI_MODEL,
             messages: [{
                 role: "user",
-                content: `Read only the visible label text in this image and return ONLY the exact product or brand name that is clearly readable on the package. Do not guess. Do not describe the image. Do not say 'pesticide'. Do not add extra words. If the name is not clearly readable, reply exactly UNREADABLE. <img src="${imageBase64}" />`
+                content: `Extract the visible text from this package image. Return valid JSON only in this exact shape: {"name":"<best visible product or brand name>","text":"<all clearly visible text you can read from the image>"}. Do not guess missing text. If a field is unreadable, use an empty string for that field. <img src="${imageBase64}" />`
             }],
             max_tokens: 512,
             temperature: 0.2,
@@ -521,11 +552,19 @@ app.post('/api/analyze-image', async (req, res) => {
 
         const data = result.data;
         if (data.choices && data.choices[0]) {
-            const detectedName = normalizeVisibleName(data.choices[0].message.content);
+            let parsed;
+            try {
+                parsed = JSON.parse(data.choices[0].message.content);
+            } catch (error) {
+                return res.status(422).json({ error: 'AI did not return readable JSON text extraction' });
+            }
+
+            const detectedName = normalizeVisibleName(parsed.name);
+            const extractedText = normalizeExtractedText(parsed.text);
             if (!detectedName) {
                 return res.status(422).json({ error: 'Could not confidently read a visible product name from the image' });
             }
-            res.json({ name: detectedName });
+            res.json({ name: detectedName, text: extractedText });
         } else {
             console.error("NV Vision API Error:", data);
             res.status(502).json({ error: 'AI service returned no completion' });

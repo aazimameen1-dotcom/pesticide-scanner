@@ -37,6 +37,7 @@ let isScanning = false;
 let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
 let aiCache = {}; // Cache to store AI descriptions by scan ID
 let pendingImageBase64 = null;
+let pendingExtractedText = null;
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -79,7 +80,7 @@ captureInput.addEventListener('change', e => {
 
             const data = await response.json();
             if (response.ok && data.name) {
-                onScanSuccess(cleanDetectedName(data.name), base64Data);
+                onScanSuccess(cleanDetectedName(data.name), base64Data, data.text || null);
             } else {
                 fallbackToManualEntry(base64Data, data.error || "Failed to analyze image.");
             }
@@ -106,6 +107,7 @@ cancelManualBtn.addEventListener('click', () => {
     readerContainer.classList.remove('hidden');
     packageNameInput.value = '';
     pendingImageBase64 = null;
+    pendingExtractedText = null;
 });
 
 // Form Submit Event
@@ -113,9 +115,10 @@ recordForm.addEventListener('submit', (e) => {
     e.preventDefault();
     const pkgName = packageNameInput.value.trim();
     if (pkgName) {
-        recordScan(pkgName, pendingImageBase64);
+        recordScan(pkgName, pendingImageBase64, pendingExtractedText);
         packageNameInput.value = '';
         pendingImageBase64 = null;
+        pendingExtractedText = null;
         manualForm.classList.add('hidden');
         readerContainer.classList.remove('hidden');
     }
@@ -208,7 +211,7 @@ document.getElementById('snap-btn').addEventListener('click', async () => {
 
         const data = await response.json();
         if (response.ok && data.name) {
-            onScanSuccess(cleanDetectedName(data.name), base64Data);
+            onScanSuccess(cleanDetectedName(data.name), base64Data, data.text || null);
         } else {
             fallbackToManualEntry(base64Data, data.error || "Failed to analyze image.");
         }
@@ -218,11 +221,11 @@ document.getElementById('snap-btn').addEventListener('click', async () => {
     }
 });
 
-function onScanSuccess(decodedText, imageBase64 = null) {
+function onScanSuccess(decodedText, imageBase64 = null, extractedText = null) {
     // Prevent multiple scans of the same item in succession, or just stop
     stopScanner();
     showNotification(`Scanned: ${decodedText}`);
-    recordScan(decodedText, imageBase64);
+    recordScan(decodedText, imageBase64, extractedText);
 }
 
 function onScanFailure(error) {
@@ -238,6 +241,7 @@ function openManualEntry(suggestedName = '') {
 
 function fallbackToManualEntry(imageBase64, message) {
     pendingImageBase64 = imageBase64;
+    pendingExtractedText = null;
     openManualEntry();
     showNotification(`${message} Enter the package name manually and the image will still be saved.`, "error");
 }
@@ -251,7 +255,7 @@ function cleanDetectedName(value) {
 }
 
 // API Functions
-async function recordScan(packageName, imageBase64 = null) {
+async function recordScan(packageName, imageBase64 = null, extractedText = null) {
     showNotification(`Recording package: ${packageName}...`);
     try {
         const response = await fetch('/api/scan', {
@@ -259,7 +263,7 @@ async function recordScan(packageName, imageBase64 = null) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ packageName, imageBase64 })
+            body: JSON.stringify({ packageName, imageBase64, extractedText })
         });
         
         const data = await response.json();

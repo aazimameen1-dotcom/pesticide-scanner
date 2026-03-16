@@ -1,45 +1,43 @@
 # EcoScan: Pesticide Package Scanner
 
-This full-stack application allows users to scan pesticide package barcodes using their device camera or manually enter them. It records the package names and scan timestamps into a MySQL database.
+This application lets users scan pesticide packages with a camera or enter them manually, then stores the scan log in Telegram instead of MySQL.
 
-## System Requirements
-- **Node.js**: Make sure Node.js is installed.
-- **MySQL**: Have a local MySQL server installed and running.
+## Requirements
+- Node.js 18 or later
+- A Telegram bot token
+- A Telegram chat or channel ID where the bot can post files
 
-## Configuration
-Before running the server, please set up your database connection.
-1. Open the file `server.js` located in this directory.
-2. Under the `dbConfig` constant, update the `user` and `password` variables to match your local MySQL credentials:
+## Telegram Storage Setup
+1. Create a bot with BotFather and copy the bot token.
+2. Add the bot to the target group, channel, or private chat.
+3. Make sure the bot can send messages and pin messages in that chat.
+4. Create a `.env` file from `.env.example` and set:
 
-```javascript
-const dbConfig = {
-    host: 'localhost',
-    user: 'root', // <-- Update this
-    password: '', // <-- Update this
-    database: 'pesticide_db',
-};
+```env
+PORT=3000
+TG_BOT_TOKEN=your_bot_token_here
+TG_CHAT_ID=your_chat_id_here
 ```
+
+The server stores scan records in memory while running and periodically uploads a `scans.json` backup to Telegram. The latest pinned backup is used to restore data on startup.
 
 ## Running the App
 
-### 1. Install Dependencies
-If you haven't already, run the following command in this folder (I have already done this during development, but run it if modules are missing):
+### 1. Install dependencies
 ```bash
 npm install
 ```
 
-### 2. Start the Server
-Start the Express server which hosts both the API and the web frontend.
+### 2. Start the server
 ```bash
 npm start
 ```
-*Note: The script will automatically connect to MySQL and create the `pesticide_db` database and the `scans` table if they don't already exist.*
 
-### 3. Open the Website
-Open your web browser and go to:
-### [http://localhost:3000](http://localhost:3000)
+### 3. Open the app
+Visit http://localhost:3000
 
 ## Features
-- **Camera Scanner**: Utilizes `html5-qrcode` to use your computer webcam or smartphone camera to capture barcode/QR information and save it directly to the database.
-- **Manual Form Backup**: In case a code is ripped, use the manual entry form to type the ID by hand.
-- **Real-time Logging**: A clean, modern interface styled completely with Vanilla CSS displaying a beautifully-rendered tracker table.
+- Camera capture and AI-assisted label extraction
+- Manual package entry fallback
+- Recent scan history with edit and delete actions
+- Telegram-backed record storage and image hosting

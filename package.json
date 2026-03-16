@@ -1,7 +1,7 @@
 {
   "name": "pesticide-scanner",
   "version": "1.0.0",
-  "description": "Website to scan pesticide packages and record to MySQL",
+  "description": "Website to scan pesticide packages and store records in Telegram",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"

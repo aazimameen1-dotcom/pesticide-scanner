@@ -35,7 +35,7 @@ const editModalClose = document.getElementById('edit-modal-close');
 let stream = null;
 let isScanning = false;
 let currentFacingMode = 'environment'; // 'environment' = back camera, 'user' = front camera
-let aiCache = {}; // Cache to store Kimi AI descriptions
+let aiCache = {}; // Cache to store Kimi AI descriptions by scan ID
 
 // Initialize app
 document.addEventListener('DOMContentLoaded', () => {
@@ -263,6 +263,9 @@ async function fetchScans() {
             scansList.innerHTML = '';
             
             data.forEach(scan => {
+                if (scan.ai_description) {
+                    aiCache[scan.id] = scan.ai_description;
+                }
                 const tr = document.createElement('tr');
                 // Format date locally
                 const dateObj = new Date(scan.scan_date);
@@ -279,7 +282,7 @@ async function fetchScans() {
                     <td data-label="Date" class="text-muted">${dateStr}</td>
                     <td data-label="Actions">
                         <div style="display: flex; gap: 0.3rem; flex-wrap: wrap;">
-                            <button class="btn primary-btn ai-info-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem;" data-name="${escapeHtml(scan.package_name)}">Ask AI</button>
+                            <button class="btn primary-btn ai-info-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem;" data-id="${scan.id}" data-name="${escapeHtml(scan.package_name)}">Ask AI</button>
                             <button class="btn outline-btn edit-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; border-color: rgba(255, 255, 255, 0.4);" data-id="${scan.id}" data-name="${escapeHtml(scan.package_name)}" data-date="${scan.scan_date}">Edit</button>
                             <button class="btn outline-btn delete-btn" style="padding: 0.4rem 0.6rem; font-size: 0.8rem; color: var(--error); border-color: rgba(239, 68, 68, 0.4);" data-id="${scan.id}">Delete</button>
                         </div>
@@ -291,22 +294,24 @@ async function fetchScans() {
             // Bind AI info buttons
             document.querySelectorAll('.ai-info-btn').forEach(btn => {
                 btn.addEventListener('click', (e) => {
+                   const scanId = e.target.getAttribute('data-id');
                    const pkgName = e.target.getAttribute('data-name');
-                   fetchAIInfo(pkgName);
+                   fetchAIInfo(scanId, pkgName);
                 });
             });
 
             // Bind Image Thumbnail clicks
             document.querySelectorAll('.scan-thumbnail').forEach(img => {
                 img.addEventListener('click', (e) => {
+                    const scanId = e.target.closest('tr')?.querySelector('.ai-info-btn')?.getAttribute('data-id');
                     const pkgName = e.target.getAttribute('data-name');
                     imageModalContent.src = e.target.src;
                     imageModalTitle.textContent = pkgName;
                     
-                    if (aiCache[pkgName]) {
-                        imageModalInfo.innerHTML = aiCache[pkgName];
+                    if (scanId && aiCache[scanId]) {
+                        imageModalInfo.textContent = aiCache[scanId];
                     } else {
-                        imageModalInfo.innerHTML = "<i>AI description not generated yet. Click 'Ask AI' in the table to fetch intelligence.</i>";
+                        imageModalInfo.textContent = "AI description not generated yet. Click 'Ask AI' in the table to fetch and store it.";
                     }
 
                     imageModal.classList.remove('hidden');
@@ -362,9 +367,9 @@ async function fetchScans() {
     }
 }
 
-async function fetchAIInfo(packageName) {
-    if (aiCache[packageName]) {
-        aiModalContent.textContent = aiCache[packageName];
+async function fetchAIInfo(scanId, packageName) {
+    if (scanId && aiCache[scanId]) {
+        aiModalContent.textContent = aiCache[scanId];
         aiModalTitle.textContent = "Kimi Insights: " + packageName;
         aiModal.classList.remove('hidden');
         aiModalBackdrop.classList.remove('hidden');
@@ -380,11 +385,13 @@ async function fetchAIInfo(packageName) {
         const response = await fetch('/api/pesticide-info', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ packageName })
+            body: JSON.stringify({ packageName, scanId })
         });
         const data = await response.json();
         if (response.ok && data.info) {
-            aiCache[packageName] = data.info; // Cache the data
+            if (scanId) {
+                aiCache[scanId] = data.info;
+            }
             aiModalContent.textContent = data.info; 
             aiModalTitle.textContent = "Kimi Insights: " + packageName;
         } else {

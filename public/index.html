@@ -23,7 +23,7 @@
     <main class="glass-container">
         <header>
             <h1><span class="highlight">Eco</span>Scan</h1>
-            <p>Pesticide Package Tracking & Database Entry System</p>
+            <p>Pesticide Package Tracking with Telegram-backed storage</p>
         </header>
 
         <section class="scanner-section">
@@ -64,7 +64,7 @@
                         <label for="package-name">Package ID / Name</label>
                         <input type="text" id="package-name" placeholder="E.g., PestBuster-400X" required autocomplete="off">
                     </div>
-                    <button type="submit" class="btn primary-btn w-100">Record Entry to Database</button>
+                    <button type="submit" class="btn primary-btn w-100">Record Entry to Telegram Storage</button>
                     <button type="button" id="cancel-manual-btn" class="btn text-btn w-100 mt-2">Cancel</button>
                 </form>
             </div>
@@ -75,7 +75,7 @@
 
         <!-- Recent Scans Section -->
         <section class="recent-scans">
-            <h3>Recent Database Entries</h3>
+            <h3>Recent Telegram-backed Entries</h3>
             <div class="table-container">
                 <table id="scans-table">
                     <thead>

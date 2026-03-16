@@ -9,7 +9,8 @@ const port = process.env.PORT || 3000;
 // Telegram Bot Config
 const TG_BOT_TOKEN = process.env.TG_BOT_TOKEN;
 const TG_CHAT_ID = process.env.TG_CHAT_ID;
-const TG_API = TG_BOT_TOKEN ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : null;
+const TG_ENABLED = Boolean(TG_BOT_TOKEN && TG_CHAT_ID);
+const TG_API = TG_ENABLED ? `https://api.telegram.org/bot${TG_BOT_TOKEN}` : null;
 
 // Middleware
 app.use(cors());
@@ -23,8 +24,19 @@ let scans = [];
 let nextId = 1;
 let syncTimer = null;
 
+function normalizeScan(scan) {
+    return {
+        id: scan.id,
+        package_name: scan.package_name,
+        scan_date: scan.scan_date,
+        image_path: scan.image_path || null,
+        telegram_file_id: scan.telegram_file_id || null,
+        ai_description: scan.ai_description || null
+    };
+}
+
 async function loadFromTelegram() {
-    if (!TG_API) { console.log('Telegram not configured, starting with empty DB.'); return; }
+    if (!TG_ENABLED) { console.log('Telegram storage is not fully configured, starting with empty DB.'); return; }
     try {
         const chatRes = await fetch(`${TG_API}/getChat?chat_id=${encodeURIComponent(TG_CHAT_ID)}`);
         const chatData = await chatRes.json();
@@ -43,7 +55,7 @@ async function loadFromTelegram() {
         const fileUrl = `https://api.telegram.org/file/bot${TG_BOT_TOKEN}/${fileData.result.file_path}`;
         const dlRes = await fetch(fileUrl);
         const json = await dlRes.json();
-        scans = json.scans || [];
+        scans = Array.isArray(json.scans) ? json.scans.map(normalizeScan) : [];
         nextId = json.nextId || (scans.length > 0 ? Math.max(...scans.map(s => s.id)) + 1 : 1);
         console.log(`Data restored from Telegram (${scans.length} scans).`);
     } catch (err) {
@@ -52,7 +64,7 @@ async function loadFromTelegram() {
 }
 
 async function saveToTelegram() {
-    if (!TG_API) return;
+    if (!TG_ENABLED) return;
     try {
         const json = JSON.stringify({ scans, nextId }, null, 2);
         const blob = new Blob([json], { type: 'application/json' });
@@ -84,7 +96,7 @@ function scheduleSave() {
 
 // Upload image to Telegram and return file_id
 async function uploadToTelegram(base64Data) {
-    if (!TG_API) {
+    if (!TG_ENABLED) {
         console.log('Telegram not configured, skipping upload');
         return null;
     }
@@ -149,7 +161,8 @@ app.post('/api/scan', async (req, res) => {
             package_name: packageName,
             scan_date: new Date().toISOString().replace('T', ' ').substring(0, 19),
             image_path: imagePath,
-            telegram_file_id: telegramFileId
+            telegram_file_id: telegramFileId,
+            ai_description: null
         };
         scans.push(scan);
         scheduleSave();
@@ -170,7 +183,7 @@ app.get('/api/scans', (req, res) => {
 // Image proxy from Telegram
 app.get('/api/image/:fileId(*)', async (req, res) => {
     try {
-        if (!TG_API) return res.status(500).json({ error: 'Telegram not configured' });
+        if (!TG_ENABLED) return res.status(500).json({ error: 'Telegram storage is not configured' });
         const fileId = decodeURIComponent(req.params.fileId);
         const fileRes = await fetch(`${TG_API}/getFile?file_id=${encodeURIComponent(fileId)}`);
         const fileData = await fileRes.json();
@@ -205,11 +218,12 @@ app.delete('/api/scans/:id', (req, res) => {
 // Update a scan
 app.put('/api/scans/:id', (req, res) => {
     const id = parseInt(req.params.id);
-    const { packageName, scanDate } = req.body;
+    const { packageName, scanDate, aiDescription } = req.body;
     const scan = scans.find(s => s.id === id);
     if (!scan) return res.status(404).json({ error: 'Scan not found' });
     if (packageName) scan.package_name = packageName;
     if (scanDate) scan.scan_date = scanDate;
+    if (typeof aiDescription === 'string') scan.ai_description = aiDescription.trim() || null;
     scheduleSave();
     res.json({ success: true, message: 'Scan updated successfully' });
 });
@@ -228,9 +242,57 @@ startup();
 const NVAPI_KEY = "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";
 const NVAPI_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
 
+async function callNvidiaApi(payload, label) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
+    let response;
+    try {
+        response = await fetch(NVAPI_URL, {
+            method: 'POST',
+            headers: {
+                "Authorization": `Bearer ${NVAPI_KEY}`,
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+    } catch (error) {
+        clearTimeout(timeout);
+        if (error.name === 'AbortError') {
+            console.error(`${label} request timed out.`);
+            return { ok: false, error: 'AI service timed out' };
+        }
+        throw error;
+    }
+
+    clearTimeout(timeout);
+
+    const rawBody = await response.text();
+    if (!rawBody.trim()) {
+        console.error(`${label} returned an empty response body.`);
+        return { ok: false, error: 'AI service returned an empty response' };
+    }
+
+    let data;
+    try {
+        data = JSON.parse(rawBody);
+    } catch (error) {
+        console.error(`${label} returned invalid JSON:`, rawBody.slice(0, 500));
+        return { ok: false, error: 'AI service returned an invalid response' };
+    }
+
+    if (!response.ok) {
+        console.error(`${label} request failed:`, response.status, data);
+        return { ok: false, error: data.error?.message || data.description || `AI service request failed with status ${response.status}` };
+    }
+
+    return { ok: true, data };
+}
+
 app.post('/api/pesticide-info', async (req, res) => {
     try {
-        const { packageName } = req.body;
+        const { packageName, scanId } = req.body;
         if (!packageName) return res.status(400).json({ error: 'Package name missing' });
 
         const payload = {
@@ -245,21 +307,26 @@ app.post('/api/pesticide-info', async (req, res) => {
             stream: false
         };
 
-        const response = await fetch(NVAPI_URL, {
-            method: 'POST',
-            headers: {
-                "Authorization": `Bearer ${NVAPI_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-        });
+        const result = await callNvidiaApi(payload, 'NV API');
+        if (!result.ok) {
+            return res.status(502).json({ error: result.error });
+        }
 
-        const data = await response.json();
+        const data = result.data;
         if (data.choices && data.choices[0]) {
-            res.json({ info: data.choices[0].message.content });
+            const info = data.choices[0].message.content.trim();
+            if (scanId !== undefined && scanId !== null) {
+                const numericId = parseInt(scanId, 10);
+                const scan = scans.find(item => item.id === numericId);
+                if (scan) {
+                    scan.ai_description = info;
+                    scheduleSave();
+                }
+            }
+            res.json({ info });
         } else {
             console.error("NV API Error:", data);
-            res.status(500).json({ error: 'Failed to fetch AI info' });
+            res.status(502).json({ error: 'AI service returned no completion' });
         }
     } catch (err) {
         console.error("AI fetch error:", err);
@@ -287,21 +354,17 @@ app.post('/api/analyze-image', async (req, res) => {
             stream: false
         };
 
-        const response = await fetch(NVAPI_URL, {
-            method: 'POST',
-            headers: {
-                "Authorization": `Bearer ${NVAPI_KEY}`,
-                "Content-Type": "application/json"
-            },
-            body: JSON.stringify(payload)
-        });
+        const result = await callNvidiaApi(payload, 'NV Vision API');
+        if (!result.ok) {
+            return res.status(502).json({ error: result.error });
+        }
 
-        const data = await response.json();
+        const data = result.data;
         if (data.choices && data.choices[0]) {
             res.json({ name: data.choices[0].message.content.trim() });
         } else {
             console.error("NV Vision API Error:", data);
-            res.status(500).json({ error: 'Failed to analyze text from image' });
+            res.status(502).json({ error: 'AI service returned no completion' });
         }
     } catch (err) {
         console.error("Vision AI fetch error:", err);

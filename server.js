@@ -22,7 +22,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 // --- In-memory database backed by Telegram ---
 let scans = [];
 let nextId = 1;
-let syncTimer = null;
+let lastTelegramSyncAt = null;
+let lastTelegramSyncError = null;
 
 function normalizeScan(scan) {
     return {
@@ -75,30 +76,32 @@ async function saveToTelegram() {
         const res = await fetch(`${TG_API}/sendDocument`, { method: 'POST', body: formData });
         const data = await res.json();
         if (data.ok) {
-            await fetch(`${TG_API}/pinChatMessage`, {
+            const pinRes = await fetch(`${TG_API}/pinChatMessage`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ chat_id: TG_CHAT_ID, message_id: data.result.message_id, disable_notification: true })
             });
+            const pinData = await pinRes.json();
+            if (!pinData.ok) {
+                throw new Error(pinData.description || 'Failed to pin Telegram backup message');
+            }
+            lastTelegramSyncAt = new Date().toISOString();
+            lastTelegramSyncError = null;
             console.log(`Data saved to Telegram (${scans.length} scans).`);
         } else {
-            console.error('Data save failed:', data.description);
+            throw new Error(data.description || 'Telegram backup upload failed');
         }
     } catch (err) {
+        lastTelegramSyncError = err.message;
         console.error('Error saving data to Telegram:', err.message);
+        throw err;
     }
-}
-
-function scheduleSave() {
-    if (syncTimer) clearTimeout(syncTimer);
-    syncTimer = setTimeout(() => saveToTelegram(), 2000);
 }
 
 // Upload image to Telegram and return file_id
 async function uploadToTelegram(base64Data) {
     if (!TG_ENABLED) {
-        console.log('Telegram not configured, skipping upload');
-        return null;
+        throw new Error('Telegram storage is not configured');
     }
     try {
         const commaIdx = base64Data.indexOf(',');
@@ -130,12 +133,22 @@ async function uploadToTelegram(base64Data) {
             console.log('Telegram upload success (document), file_id:', fileId.substring(0, 20) + '...');
             return fileId;
         }
-        console.error('Telegram upload failed:', JSON.stringify(data2));
-        return null;
+        throw new Error(data2.description || 'Telegram image upload failed');
     } catch (err) {
         console.error('Telegram upload error:', err.message);
-        return null;
+        throw err;
     }
+}
+
+function cloneScan(scan) {
+    return {
+        id: scan.id,
+        package_name: scan.package_name,
+        scan_date: scan.scan_date,
+        image_path: scan.image_path,
+        telegram_file_id: scan.telegram_file_id,
+        ai_description: scan.ai_description
+    };
 }
 
 // --- API Endpoints ---
@@ -165,7 +178,15 @@ app.post('/api/scan', async (req, res) => {
             ai_description: null
         };
         scans.push(scan);
-        scheduleSave();
+        if (TG_ENABLED) {
+            try {
+                await saveToTelegram();
+            } catch (error) {
+                scans = scans.filter(item => item.id !== scan.id);
+                nextId = scan.id;
+                return res.status(502).json({ error: `Failed to save scan to Telegram: ${error.message}` });
+            }
+        }
 
         res.json({ success: true, message: 'Scan recorded successfully', id: scan.id, packageName, imagePath });
     } catch (error) {
@@ -178,6 +199,16 @@ app.post('/api/scan', async (req, res) => {
 app.get('/api/scans', (req, res) => {
     const recent = [...scans].sort((a, b) => b.id - a.id).slice(0, 50);
     res.json(recent);
+});
+
+app.get('/api/telegram-status', (req, res) => {
+    res.json({
+        enabled: TG_ENABLED,
+        chatIdConfigured: Boolean(TG_CHAT_ID),
+        botTokenConfigured: Boolean(TG_BOT_TOKEN),
+        lastTelegramSyncAt,
+        lastTelegramSyncError
+    });
 });
 
 // Image proxy from Telegram
@@ -206,25 +237,41 @@ app.get('/api/image/:fileId(*)', async (req, res) => {
 });
 
 // Delete a scan
-app.delete('/api/scans/:id', (req, res) => {
+app.delete('/api/scans/:id', async (req, res) => {
     const id = parseInt(req.params.id);
     const idx = scans.findIndex(s => s.id === id);
     if (idx === -1) return res.status(404).json({ error: 'Scan not found' });
+    const deletedScan = cloneScan(scans[idx]);
     scans.splice(idx, 1);
-    scheduleSave();
+    if (TG_ENABLED) {
+        try {
+            await saveToTelegram();
+        } catch (error) {
+            scans.splice(idx, 0, deletedScan);
+            return res.status(502).json({ error: `Failed to delete scan from Telegram backup: ${error.message}` });
+        }
+    }
     res.json({ success: true, message: 'Scan deleted successfully' });
 });
 
 // Update a scan
-app.put('/api/scans/:id', (req, res) => {
+app.put('/api/scans/:id', async (req, res) => {
     const id = parseInt(req.params.id);
     const { packageName, scanDate, aiDescription } = req.body;
     const scan = scans.find(s => s.id === id);
     if (!scan) return res.status(404).json({ error: 'Scan not found' });
+    const previousScan = cloneScan(scan);
     if (packageName) scan.package_name = packageName;
     if (scanDate) scan.scan_date = scanDate;
     if (typeof aiDescription === 'string') scan.ai_description = aiDescription.trim() || null;
-    scheduleSave();
+    if (TG_ENABLED) {
+        try {
+            await saveToTelegram();
+        } catch (error) {
+            Object.assign(scan, previousScan);
+            return res.status(502).json({ error: `Failed to update Telegram backup: ${error.message}` });
+        }
+    }
     res.json({ success: true, message: 'Scan updated successfully' });
 });
 
@@ -319,8 +366,16 @@ app.post('/api/pesticide-info', async (req, res) => {
                 const numericId = parseInt(scanId, 10);
                 const scan = scans.find(item => item.id === numericId);
                 if (scan) {
+                    const previousDescription = scan.ai_description;
                     scan.ai_description = info;
-                    scheduleSave();
+                    if (TG_ENABLED) {
+                        try {
+                            await saveToTelegram();
+                        } catch (error) {
+                            scan.ai_description = previousDescription;
+                            return res.status(502).json({ error: `Failed to save AI description to Telegram: ${error.message}` });
+                        }
+                    }
                 }
             }
             res.json({ info });

@@ -341,15 +341,16 @@ function parseNvidiaStream(rawBody, label) {
     };
 }
 
-async function callNvidiaApi(payload, label) {
+async function callNvidiaApi(payload, label, options = {}) {
     if (!NVAPI_KEY) {
         return { ok: false, error: 'NVAPI_KEY is not configured on the server' };
     }
 
     const useStream = Boolean(payload.stream);
+    const timeoutMs = options.timeoutMs || 15000;
 
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 15000);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
     let response;
     try {
@@ -463,7 +464,7 @@ app.post('/api/analyze-image', async (req, res) => {
                 role: "user",
                 content: `What is the name of the pesticide product shown in this image? Reply with ONLY the product name. Do not add conversational text. <img src="${imageBase64}" />`
             }],
-            max_tokens: 512,
+            max_tokens: 64,
             temperature: 0.15,
             top_p: 1.0,
             frequency_penalty: 0.0,
@@ -471,7 +472,7 @@ app.post('/api/analyze-image', async (req, res) => {
             stream: true
         };
 
-        const result = await callNvidiaApi(payload, 'NV Vision API');
+        const result = await callNvidiaApi(payload, 'NV Vision API', { timeoutMs: 45000 });
         if (!result.ok) {
             return res.status(502).json({ error: result.error });
         }

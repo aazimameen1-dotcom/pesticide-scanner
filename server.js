@@ -341,6 +341,47 @@ function parseNvidiaStream(rawBody, label) {
     };
 }
 
+function normalizeVisibleName(rawText) {
+    if (!rawText) return null;
+
+    const normalized = rawText
+        .replace(/^['"`\s]+|['"`\s]+$/g, '')
+        .replace(/[\r\n]+/g, ' ')
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+
+    if (!normalized) return null;
+
+    const lower = normalized.toLowerCase();
+    const invalidPhrases = [
+        'unable to determine',
+        'not visible',
+        'not readable',
+        'unreadable',
+        'cannot determine',
+        'cannot read',
+        'product name',
+        'pesticide',
+        'image shows',
+        'the name is',
+        'the product is'
+    ];
+
+    if (invalidPhrases.some(phrase => lower.includes(phrase))) {
+        return null;
+    }
+
+    if (normalized.length > 60) {
+        return null;
+    }
+
+    if (/[.!?]/.test(normalized)) {
+        return null;
+    }
+
+    return normalized;
+}
+
 async function callNvidiaApi(payload, label, options = {}) {
     if (!NVAPI_KEY) {
         return { ok: false, error: 'NVAPI_KEY is not configured on the server' };
@@ -462,10 +503,10 @@ app.post('/api/analyze-image', async (req, res) => {
             model: "mistralai/mistral-large-3-675b-instruct-2512",
             messages: [{
                 role: "user",
-                content: `What is the name of the pesticide product shown in this image? Reply with ONLY the product name. Do not add conversational text. <img src="${imageBase64}" />`
+                content: `Read only the visible label text in this image and return ONLY the exact product or brand name that is clearly readable on the package. Do not guess. Do not describe the image. Do not say 'pesticide'. Do not add extra words. If the name is not clearly readable, reply exactly UNREADABLE. <img src="${imageBase64}" />`
             }],
             max_tokens: 64,
-            temperature: 0.15,
+            temperature: 0.0,
             top_p: 1.0,
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
@@ -479,7 +520,11 @@ app.post('/api/analyze-image', async (req, res) => {
 
         const data = result.data;
         if (data.choices && data.choices[0]) {
-            res.json({ name: data.choices[0].message.content.trim() });
+            const detectedName = normalizeVisibleName(data.choices[0].message.content);
+            if (!detectedName) {
+                return res.status(422).json({ error: 'Could not confidently read a visible product name from the image' });
+            }
+            res.json({ name: detectedName });
         } else {
             console.error("NV Vision API Error:", data);
             res.status(502).json({ error: 'AI service returned no completion' });

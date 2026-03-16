@@ -288,6 +288,7 @@ startup();
 // NVIDIA AI Endpoints
 const NVAPI_KEY = process.env.NVAPI_KEY;
 const NVAPI_URL = "https://integrate.api.nvidia.com/v1/chat/completions";
+const NVAPI_MODEL = "google/gemma-3-27b-it";
 
 function extractStreamContent(eventData) {
     const choice = eventData.choices && eventData.choices[0];
@@ -448,15 +449,15 @@ app.post('/api/pesticide-info', async (req, res) => {
         if (!packageName) return res.status(400).json({ error: 'Package name missing' });
 
         const payload = {
-            model: "mistralai/mistral-large-3-675b-instruct-2512",
+            model: NVAPI_MODEL,
             messages: [{
                 role: "user",
                 content: `Provide a short, 2-3 sentence informational summary about the pesticide product '${packageName}', including its uses and safety precautions.`
             }],
-            max_tokens: 384,
-            temperature: 0.3,
-            top_p: 1.0,
-            stream: false
+            max_tokens: 512,
+            temperature: 0.2,
+            top_p: 0.7,
+            stream: true
         };
 
         const result = await callNvidiaApi(payload, 'NV API');
@@ -500,14 +501,14 @@ app.post('/api/analyze-image', async (req, res) => {
         if (!imageBase64) return res.status(400).json({ error: 'Image missing' });
 
         const payload = {
-            model: "mistralai/mistral-large-3-675b-instruct-2512",
+            model: NVAPI_MODEL,
             messages: [{
                 role: "user",
                 content: `Read only the visible label text in this image and return ONLY the exact product or brand name that is clearly readable on the package. Do not guess. Do not describe the image. Do not say 'pesticide'. Do not add extra words. If the name is not clearly readable, reply exactly UNREADABLE. <img src="${imageBase64}" />`
             }],
-            max_tokens: 64,
-            temperature: 0.0,
-            top_p: 1.0,
+            max_tokens: 512,
+            temperature: 0.2,
+            top_p: 0.7,
             frequency_penalty: 0.0,
             presence_penalty: 0.0,
             stream: true
